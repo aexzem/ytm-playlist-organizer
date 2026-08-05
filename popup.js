@@ -1,5 +1,3 @@
-// popup.js — main popup + settings logic
-
 /* constants */
 const GENRES = ['Rock', 'Pop', 'Electronic', 'R&B', 'Metal', 'Classical', 'Jazz', 'Hip-Hop', 'Nightcore', 'Cover', 'Untagged', "Indie"];
 

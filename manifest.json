@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "YT Music Playlist Enhancer",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "Tag, search, and manage your YouTube Music playlists easily. Find duplicates and export your data.",
   "icons": {
     "16": "icons/icon16.png",
