@@ -286,8 +286,8 @@ function showError(msg) {
 }
 
 function setStatus(state, label) {
-  statusDot.className    = `status-dot ${state}`;
-  statusLabel.textContent = label;
+  if (statusDot) statusDot.className    = `status-dot ${state}`;
+  if (statusLabel) statusLabel.textContent = label;
 }
 
 let toastTimer;

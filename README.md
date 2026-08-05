@@ -1,4 +1,4 @@
-# 🎵 YT Music Playlist Enhancer
+# 🎵 Dupi - YT Music Playlist Organizer
 
 [![Version](https://img.shields.io/badge/version-1.2.2-00f0ff.svg?style=flat-square)](https://github.com/AexZeM/yt-music-playlist-enhancer)
 [![Platform](https://img.shields.io/badge/platform-Chrome-red.svg?style=flat-square)](https://music.youtube.com)
@@ -43,5 +43,5 @@ I searched for an extension to solve this, but none satisfied my needs. So, I de
 ## How to Use
 1. Navigate to [YouTube Music](https://music.youtube.com).
 2. Open any of your playlists.
-3. The Enhancer interface will automatically load and integrate directly into the page.
+3. The Dupi interface will automatically load and integrate directly into the page.
 4. *Note: The extension will automatically scroll and load all songs in your playlist before performing actions like scanning for duplicates or filtering.*

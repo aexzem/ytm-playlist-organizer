@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>YTM Enhancer</title>
+  <title>Dupi - YT Music Playlist Organizer</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
   <style>
@@ -287,15 +287,14 @@
 
   <div class="page active" id="page-main">
     <div class="header">
-      <div class="header-left">
-        <span class="app-name">YTM Playlist Enhancer</span>
-        <span class="app-version">v1.2.1</span>
+      <div class="header-left" style="display: flex; flex-direction: column; gap: 2px;">
+        <div style="display: flex; align-items: center; gap: 6px;">
+          <img src="icons/Icon16.png" alt="Dupi" style="width: 15px; height: 15px; object-fit: contain; flex-shrink: 0;" />
+          <span class="app-name" style="font-size: 12.5px; font-weight: 600; color: var(--text-primary); letter-spacing: 0.02em; white-space: nowrap;">Dupi - YT Music Organizer</span>
+        </div>
+        <span class="app-version" style="padding-left: 21px;">v1.2.2</span>
       </div>
       <div class="header-right">
-        <div class="status-dot-wrap">
-          <div class="status-dot" id="status-dot"></div>
-          <span class="status-label" id="status-label">SYS.CHK</span>
-        </div>
         <button class="icon-btn" id="btn-settings" title="Settings">⚙</button>
       </div>
     </div>
@@ -337,11 +336,11 @@
 
     <div class="footer">
       <button class="footer-link" id="btn-refresh">Re-Sync</button>
-      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;">
-        <button class="review-btn" id="btn-review">⭐ Rate & Review</button>      
-        <span class="signature">Made By AexZeM ✨</span>
+      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:5px;">
+        <button class="review-btn" id="btn-review" style="font-size: 10px; padding: 4px 8px; background: rgba(251, 191, 36, 0.08); border: 1px solid rgba(251, 191, 36, 0.3); border-radius: 4px; color: #fbbf24; display: flex; align-items: center; gap: 4px; cursor: pointer; transition: all 0.2s;">⭐ Rate & Review</button>      
+        <span class="signature" style="font-size: 7.5px; font-family: 'DM Mono', monospace; color: color-mix(in srgb, var(--text-primary) 30%, transparent); letter-spacing: 0.05em;">Made By AexZeM ✨</span>
+      </div>
     </div>
-  </div>
 </div>
 
   <div class="page" id="page-settings">
