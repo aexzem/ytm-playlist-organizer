@@ -23,6 +23,9 @@ const playlistMeta     = document.getElementById('playlist-meta');
 const toast            = document.getElementById('toast');
 const btnRefresh       = document.getElementById('btn-refresh');
 const btnReview        = document.getElementById('btn-review');
+const reviewPrompt     = document.getElementById('review-prompt');
+const reviewPromptRate = document.getElementById('review-prompt-rate');
+const reviewNotNow     = document.getElementById('review-not-now');
 const btnSettings      = document.getElementById('btn-settings');
 const btnBack          = document.getElementById('btn-back');
 const btnClearCache    = document.getElementById('btn-clear-cache');
@@ -39,6 +42,96 @@ const btnMD   = document.getElementById('export-md');
 let cachedTracks        = [];
 let cachedPlaylistTitle = 'playlist';
 let settings            = { ...DEFAULT_SETTINGS };
+let reviewStateQueue    = Promise.resolve();
+
+const REVIEW_STATE_KEY = 'ytme_review_nudge';
+const REVIEW_URL = 'https://chromewebstore.google.com/detail/dupi-yt-music-playlist-or/aigenoggiahlkplokpmlhojfndombagg/reviews';
+const ReviewNudge = window.__ytmeReviewNudge;
+
+function emptyReviewState() {
+  return ReviewNudge?.normalize(null) ?? {
+    successfulUses: 0,
+    rated: false,
+    snoozeUntil: 0,
+    lastPromptAt: 0,
+    pulseShown: false,
+  };
+}
+
+function readReviewState() {
+  return new Promise(resolve => {
+    try {
+      chrome.storage.local.get(REVIEW_STATE_KEY, data => {
+        if (chrome.runtime.lastError) {
+          resolve(emptyReviewState());
+          return;
+        }
+        resolve(ReviewNudge?.normalize(data?.[REVIEW_STATE_KEY]) ?? emptyReviewState());
+      });
+    } catch {
+      resolve(emptyReviewState());
+    }
+  });
+}
+
+function writeReviewState(state) {
+  return new Promise(resolve => {
+    try {
+      chrome.storage.local.set({ [REVIEW_STATE_KEY]: state }, () => {
+        resolve(!chrome.runtime.lastError);
+      });
+    } catch {
+      resolve(false);
+    }
+  });
+}
+
+function hideReviewPrompt() {
+  reviewPrompt?.classList.remove('visible');
+}
+
+function showReviewPrompt(shouldPulse) {
+  reviewPrompt?.classList.add('visible');
+  if (!shouldPulse || !btnReview) return;
+  btnReview.classList.remove('review-pulse');
+  void btnReview.offsetWidth;
+  btnReview.classList.add('review-pulse');
+  btnReview.addEventListener('animationend', () => btnReview.classList.remove('review-pulse'), { once: true });
+}
+
+function recordSuccessfulExtraction() {
+  if (!ReviewNudge) return Promise.resolve();
+  reviewStateQueue = reviewStateQueue.then(async () => {
+    const current = await readReviewState();
+    const outcome = ReviewNudge.recordSuccess(current);
+    const saved = await writeReviewState(outcome.state);
+    if (saved && outcome.shouldPrompt) showReviewPrompt(outcome.shouldPulse);
+  });
+  return reviewStateQueue;
+}
+
+function rateDupi() {
+  reviewStateQueue = reviewStateQueue.then(async () => {
+    const current = await readReviewState();
+    if (ReviewNudge) await writeReviewState(ReviewNudge.markRated(current));
+    hideReviewPrompt();
+    chrome.tabs.create({ url: REVIEW_URL });
+  });
+  return reviewStateQueue;
+}
+
+function snoozeReviewPrompt() {
+  if (!ReviewNudge) {
+    hideReviewPrompt();
+    return Promise.resolve();
+  }
+  reviewStateQueue = reviewStateQueue.then(async () => {
+    const current = await readReviewState();
+    await writeReviewState(ReviewNudge.snooze(current));
+    hideReviewPrompt();
+  });
+  return reviewStateQueue;
+}
 
 function showPage(pageId, isBack = false) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active', 'back-anim'));
@@ -276,6 +369,7 @@ function showMain(stats) {
   playlistName.textContent = cachedPlaylistTitle;
   playlistMeta.textContent = `${cachedTracks.length} track${cachedTracks.length !== 1 ? 's' : ''} loaded`;
   renderGenrePills(stats);
+  recordSuccessfulExtraction();
 }
 
 function showError(msg) {
@@ -385,9 +479,9 @@ btnRefresh.addEventListener('click', () => {
   init();
 });
 
-btnReview.addEventListener('click', () => {
-  chrome.tabs.create({ url: 'https://chrome.google.com/webstore/detail/yt-music-playlist-enhance/aigenoggiahlkplokpmlhojfndombagg/reviews' });
-});
+btnReview.addEventListener('click', rateDupi);
+reviewPromptRate.addEventListener('click', rateDupi);
+reviewNotNow.addEventListener('click', snoozeReviewPrompt);
 
 
 

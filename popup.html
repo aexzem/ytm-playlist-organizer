@@ -145,10 +145,25 @@
     .danger-btn:hover { background: rgba(239,68,68,0.15); }
 
     /* ── FOOTER & TOAST ── */
-    .footer { padding: 16px; display: flex; align-items: center; justify-content: space-between; margin-top: auto; border-top: 1px solid var(--border-color); }
+    .footer { padding: 16px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin-top: auto; border-top: 1px solid var(--border-color); }
     .footer-link { font-family: 'DM Mono', monospace; font-size: 9px; color: color-mix(in srgb, var(--text-primary) 20%, transparent); background: none; border: none; cursor: pointer; letter-spacing: 0.1em; transition: color 0.2s; }
-    .review-btn { font-family: 'DM Mono', monospace; font-size: 9px; color: color-mix(in srgb, var(--text-primary) 80%, transparent); background: none; border: none; cursor: pointer; letter-spacing: 0.08em; transition: color 0.2s; display: flex; align-items: center; gap: 4px; }
-    .review-btn:hover { color: var(--accent-color); }
+    .footer-review-stack { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+    .review-btn { font-family: 'DM Mono', monospace; font-size: 9px; color: color-mix(in srgb, var(--text-primary) 32%, transparent); background: transparent; border: none; border-radius: 4px; padding: 4px 6px; cursor: pointer; letter-spacing: 0.08em; transition: color 0.18s, background 0.18s, box-shadow 0.18s; display: flex; align-items: center; gap: 4px; }
+    .review-btn:hover, .review-btn:focus-visible { color: #fbbf24; background: rgba(251,191,36,0.07); outline: none; }
+    .review-prompt { display: none; flex: 1 0 100%; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 10px; background: color-mix(in srgb, var(--text-primary) 2%, transparent); border-left: 1px solid rgba(251,191,36,0.38); }
+    .review-prompt.visible { display: flex; }
+    .review-prompt-copy { font-family: 'DM Mono', monospace; font-size: 9px; color: color-mix(in srgb, var(--text-primary) 58%, transparent); white-space: nowrap; }
+    .review-prompt-actions { display: flex; align-items: center; gap: 8px; }
+    .review-prompt-rate, .review-not-now { border: none; background: transparent; cursor: pointer; font-family: 'DM Mono', monospace; font-size: 8px; white-space: nowrap; }
+    .review-prompt-rate { color: #fbbf24; }
+    .review-prompt-rate:hover, .review-prompt-rate:focus-visible { text-decoration: underline; outline: none; }
+    .review-not-now { color: color-mix(in srgb, var(--text-primary) 28%, transparent); }
+    .review-not-now:hover, .review-not-now:focus-visible { color: var(--text-primary); outline: none; }
+    .review-btn.review-pulse { animation: review-pulse 0.9s ease-out 1; }
+    @keyframes review-pulse {
+      0%, 100% { color: color-mix(in srgb, var(--text-primary) 32%, transparent); box-shadow: 0 0 0 rgba(251,191,36,0); }
+      45% { color: #fbbf24; background: rgba(251,191,36,0.06); box-shadow: 0 0 10px rgba(251,191,36,0.16); }
+    }
     .footer-link:hover { color: var(--text-primary); }
 
     #toast {
@@ -335,9 +350,16 @@
     </div>
 
     <div class="footer">
+      <div class="review-prompt" id="review-prompt" role="status" aria-live="polite">
+        <span class="review-prompt-copy">Enjoying Dupi?</span>
+        <span class="review-prompt-actions">
+          <button class="review-prompt-rate" id="review-prompt-rate">★ Rate Dupi</button>
+          <button class="review-not-now" id="review-not-now">Not now</button>
+        </span>
+      </div>
       <button class="footer-link" id="btn-refresh">Re-Sync</button>
-      <div style="display:flex;flex-direction:column;align-items:flex-end;gap:5px;">
-        <button class="review-btn" id="btn-review" style="font-size: 10px; padding: 4px 8px; background: rgba(251, 191, 36, 0.08); border: 1px solid rgba(251, 191, 36, 0.3); border-radius: 4px; color: #fbbf24; display: flex; align-items: center; gap: 4px; cursor: pointer; transition: all 0.2s;">⭐ Rate & Review</button>      
+      <div class="footer-review-stack">
+        <button class="review-btn" id="btn-review" title="Rate Dupi on the Chrome Web Store">★ Rate Dupi</button>
         <span class="signature" style="font-size: 7.5px; font-family: 'DM Mono', monospace; color: color-mix(in srgb, var(--text-primary) 30%, transparent); letter-spacing: 0.05em;">Made By AexZeM ✨</span>
       </div>
     </div>
@@ -402,6 +424,7 @@
   </div>
 
   <div id="toast"></div>
+  <script src="review_nudge.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

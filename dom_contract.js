@@ -124,46 +124,56 @@
     }) || null;
   }
 
-  function getVisibleContinuation(doc = document) {
-    return Array.from(doc.querySelectorAll(selectors.activeContinuations)).find(element => {
+  function getVisibleContinuations(doc = document) {
+    return Array.from(doc.querySelectorAll(selectors.activeContinuations)).filter(element => {
       const rect = element.getBoundingClientRect?.();
       const style = doc.defaultView?.getComputedStyle?.(element);
       return (!style || (style.display !== 'none' && style.visibility !== 'hidden')) &&
         (!rect || rect.height > 0 || rect.width > 0);
-    }) || null;
+    });
+  }
+
+  function getVisibleContinuation(doc = document) {
+    return getVisibleContinuations(doc)[0] || null;
   }
 
   function requestMoreTracks(doc = document) {
-    const continuation = getVisibleContinuation(doc);
-    if (!continuation?.style) return false;
-    if (continuationPulses.has(continuation)) return true;
+    const continuations = getVisibleContinuations(doc).filter(element => element?.style);
+    if (!continuations.length) return false;
 
-    const saved = {
-      transform: continuation.style.transform,
-      opacity: continuation.style.opacity,
-      pointerEvents: continuation.style.pointerEvents,
-      willChange: continuation.style.willChange,
-    };
+    continuations.forEach(continuation => {
+      if (continuationPulses.has(continuation)) return;
 
-    // Keep the renderer in normal document flow. YTM's current continuation
-    // observer no longer responds when its target is position:fixed, but it
-    // does observe a transformed target. The near-transparent pulse brings
-    // only the loader into the viewport without moving the user's scroll.
-    const rect = continuation.getBoundingClientRect?.();
-    const translateY = Math.max(0, (Number(rect?.top) || 0) - 8);
+      const saved = {
+        position: continuation.style.position,
+        top: continuation.style.top,
+        opacity: continuation.style.opacity,
+        pointerEvents: continuation.style.pointerEvents,
+        willChange: continuation.style.willChange,
+      };
 
-    Object.assign(continuation.style, {
-      transform: `translate3d(0, -${translateY}px, 0)`,
-      opacity: '0.001',
-      pointerEvents: 'none',
-      willChange: 'transform',
+    // Keep the renderer's original layout slot intact. A temporary relative
+    // offset changes the sentinel's actual box (which IntersectionObserver
+    // sees) without changing scrollTop or collapsing the playlist height.
+    // Transforms are intentionally avoided: YTM's current observer ignores a
+    // transform-only move even though getBoundingClientRect() changes.
+      const rect = continuation.getBoundingClientRect?.();
+      const offsetTop = Math.max(0, (Number(rect?.top) || 0) - 8);
+
+      Object.assign(continuation.style, {
+        position: 'relative',
+        top: `-${offsetTop}px`,
+        opacity: '0.001',
+        pointerEvents: 'none',
+        willChange: 'top',
+      });
+
+      const timer = root.setTimeout(() => {
+        Object.assign(continuation.style, saved);
+        continuationPulses.delete(continuation);
+      }, CONTINUATION_PULSE_MS);
+      continuationPulses.set(continuation, timer);
     });
-
-    const timer = root.setTimeout(() => {
-      Object.assign(continuation.style, saved);
-      continuationPulses.delete(continuation);
-    }, CONTINUATION_PULSE_MS);
-    continuationPulses.set(continuation, timer);
     return true;
   }
 
@@ -184,6 +194,7 @@
     getActionMenuButton,
     getFixedColumns,
     getRemoveMenuItem,
+    getVisibleContinuations,
     getVisibleContinuation,
     requestMoreTracks,
   });

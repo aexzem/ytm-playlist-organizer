@@ -292,6 +292,49 @@ const UIManager = {
         document.head.appendChild(style);
       }
 
+      if (!document.getElementById('ytme-track-ui-styles')) {
+        const style = document.createElement('style');
+        style.id = 'ytme-track-ui-styles';
+        style.textContent = `
+          .ytme-genre-badge {
+            position: relative;
+          }
+          .ytme-genre-badge[data-hover-tags]:not([data-hover-tags=""]) {
+            cursor: help;
+          }
+          .ytme-genre-badge[data-hover-tags]:not([data-hover-tags=""])::after {
+            content: attr(data-hover-tags);
+            position: absolute;
+            right: 0;
+            bottom: calc(100% + 7px);
+            z-index: 2147483646;
+            width: max-content;
+            max-width: min(260px, 70vw);
+            padding: 6px 9px;
+            border: 1px solid color-mix(in srgb, var(--ytme-accent) 24%, transparent);
+            border-radius: 7px;
+            background: color-mix(in srgb, var(--ytme-bg) 96%, transparent);
+            box-shadow: 0 8px 24px rgba(0,0,0,.55);
+            color: var(--ytme-text);
+            font: 500 9px/1.4 'DM Mono', monospace;
+            letter-spacing: .03em;
+            white-space: normal;
+            opacity: 0;
+            visibility: hidden;
+            pointer-events: none;
+            transform: translateY(3px);
+            transition: opacity .14s ease, transform .14s ease, visibility .14s;
+          }
+          .ytme-genre-badge[data-hover-tags]:not([data-hover-tags=""]):hover::after,
+          .ytme-genre-badge[data-hover-tags]:not([data-hover-tags=""]):focus-visible::after {
+            opacity: 1;
+            visibility: visible;
+            transform: translateY(0);
+          }
+        `;
+        document.head.appendChild(style);
+      }
+
       if (window.__ytmeTagger?.getTagPickerHTML && !document.getElementById('tag-picker')) {
         const temp = document.createElement('div');
         temp.innerHTML = window.__ytmeTagger.getTagPickerHTML();
@@ -410,14 +453,26 @@ const UIManager = {
     });
   },
 
-_updateGenreBadge(badgeEl, track) {
+  _updateGenreBadge(badgeEl, track) {
     if (!badgeEl || !track) return;
     const tags = window.__ytmeTagger?.getTags(track);
     if (tags?.genres?.length) {
       const [first, ...rest] = tags.genres;
+      const hoverTags = rest.slice(0, 4);
       badgeEl.textContent = rest.length ? `${first} +${rest.length}` : first;
+      badgeEl.dataset.hoverTags = hoverTags.join(' • ');
+      if (hoverTags.length) {
+        badgeEl.tabIndex = 0;
+        badgeEl.setAttribute('aria-label', `${first}; other tags: ${hoverTags.join(', ')}`);
+      } else {
+        badgeEl.removeAttribute('tabindex');
+        badgeEl.removeAttribute('aria-label');
+      }
       badgeEl.style.display = '';
     } else {
+      badgeEl.dataset.hoverTags = '';
+      badgeEl.removeAttribute('tabindex');
+      badgeEl.removeAttribute('aria-label');
       badgeEl.style.display = 'none';
     }
   },
@@ -496,7 +551,7 @@ _updateGenreBadge(badgeEl, track) {
         <input type="text" id="playlist-input" placeholder="Query a track!">
       </div>` : '';
     const dupHTML = duplicatesEnabled ? `
-      <button id="find-duplicates"><span>⚡</span> SCAN</button>` : '';
+      <button id="find-duplicates" title="Scan this playlist for duplicate tracks" aria-label="Scan this playlist for duplicate tracks"><span>⚡</span> SCAN</button>` : '';
 
     return `
 <style>
@@ -504,11 +559,11 @@ _updateGenreBadge(badgeEl, track) {
   *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
   :host{--ytme-accent:#00f0ff}
 
-  #enhancer-container{display:flex;align-items:center;flex-wrap:nowrap}
+  #enhancer-container{display:flex;align-items:center;flex-wrap:nowrap;min-width:0;max-width:min(100%,470px)}
 
   /* ── BORDERLESS SEARCH BAR ── */
   #enhancer-search-bar{
-    position:relative; width:220px; height:36px;
+    position:relative; width:clamp(150px,22vw,220px); min-width:120px; height:36px; flex:0 1 auto;
     background:rgba(255,255,255,0.04);
     backdrop-filter:blur(24px);
     border:none;
@@ -518,13 +573,13 @@ _updateGenreBadge(badgeEl, track) {
     display:flex; align-items:center; padding:0 24px 0 14px; margin-left:15px;
     transition:width .3s cubic-bezier(0.16,1,0.3,1), background .2s;
   }
-  #enhancer-search-bar:focus-within{width:300px; background:rgba(255,255,255,0.08);}
+  #enhancer-search-bar:focus-within{width:clamp(190px,30vw,300px); background:rgba(255,255,255,0.08);}
   input{background:transparent; border:none; color:#fff; outline:none; width:100%; font-size:12px; font-family:'DM Mono',monospace;}
-  ::placeholder{color:rgba(255,255,255,0.2); letter-spacing:0.1em;}
+  ::placeholder{color:rgba(255,255,255,0.4); letter-spacing:0.1em;}
 
   /* ── DUPLICATE BUTTON ── */
   #find-duplicates{
-    position:relative; height:36px;
+    position:relative; height:36px; flex:0 0 auto;
     background:rgba(255,255,255,0.04);
     backdrop-filter:blur(24px);
     border:none;
@@ -536,6 +591,20 @@ _updateGenreBadge(badgeEl, track) {
     transition:color .2s, background .2s;
   }
   #find-duplicates:hover{background:rgba(255,255,255,0.1); color:#fff;}
+
+  @media (max-width:700px){
+    #enhancer-container{max-width:calc(100vw - 128px)}
+    #enhancer-search-bar{width:clamp(120px,30vw,180px);margin-left:4px;padding-left:11px;padding-right:20px}
+    #enhancer-search-bar:focus-within{width:clamp(145px,38vw,220px)}
+    #find-duplicates{margin-left:2px;padding-left:18px;padding-right:12px}
+  }
+
+  @media (max-width:480px){
+    #enhancer-container{max-width:calc(100vw - 92px)}
+    #enhancer-search-bar{width:min(42vw,150px)}
+    #enhancer-search-bar:focus-within{width:min(50vw,180px)}
+    #find-duplicates{font-size:10px;padding-left:15px;padding-right:9px}
+  }
 
   /* ── FILTER TAGS ── */
   .active-filter-tag{display:inline-flex;align-items:center;gap:6px;font-family:'DM Mono',monospace;font-size:9px;padding:4px 12px;background:color-mix(in srgb, var(--ytme-accent) 5%, transparent);color:var(--ytme-accent);border:none;clip-path:polygon(4px 0,100% 0,calc(100% - 4px) 100%,0 100%);cursor:pointer;transition:background .2s;margin-left:8px;flex-shrink:0}
@@ -1199,6 +1268,7 @@ const DOMObserver = {
   _deltaInterval:  null,
   _deltaBusy:      false,
   _dragDropObs:    null,
+  _dragDropRoot:   null,
 
   // watch for SPA navigation
   watchNavigation() {
@@ -1213,6 +1283,13 @@ const DOMObserver = {
         const isPlaylist = href.includes('music.youtube.com/playlist') ||
                            href.includes('music.youtube.com/browse/VL');
         if (isPlaylist) {
+          const playlistContents = window.__ytmeDom.getPlaylistContents(document);
+          const urlChanged = href !== Enhancer._lastNavigationUrl;
+          const playlistRootChanged = playlistContents && playlistContents !== this._dragDropRoot;
+          if (urlChanged || playlistRootChanged) {
+            Enhancer.softReset(href, playlistRootChanged);
+            return;
+          }
           Enhancer.injectUI();
         } else {
           // not a playlist, remove UI
@@ -1303,6 +1380,7 @@ const DOMObserver = {
 
     const playlistContainer = window.__ytmeDom.getPlaylistContents(document);
     if (!playlistContainer) return;
+    this._dragDropRoot = playlistContainer;
     this._dragDropObs.observe(playlistContainer, { childList: true, subtree: true });
   },
 
@@ -1328,8 +1406,8 @@ const Enhancer = {
   },
 
   /** Soft reset when SPA navigation detected by background script */
-  async softReset(nextUrl = window.location.href) {
-    if (nextUrl === this._lastNavigationUrl) return false;
+  async softReset(nextUrl = window.location.href, force = false) {
+    if (!force && nextUrl === this._lastNavigationUrl) return false;
     this._lastNavigationUrl = nextUrl;
 
     State.allTracks = [];
@@ -1378,6 +1456,11 @@ const Enhancer = {
     const searchBox = document.querySelector(Config.selectors.searchBox);
     if (!searchBox || document.body.contains(host)) return;
 
+    // Reserve the current shelf before autoload starts mutating it. Without
+    // this, those normal row additions look like a playlist-root replacement
+    // and the SPA guard repeatedly tears down/rebuilds Dupi while scrolling.
+    DOMObserver._dragDropRoot = window.__ytmeDom.getPlaylistContents(document);
+
     try {
       document.getElementById('tag-picker')?.remove();
       document.getElementById('ytme-tag-picker-styles')?.remove();
@@ -1402,9 +1485,12 @@ const Enhancer = {
             }
           }
 
+          // Observe the shelf before autoload appends its next batch so tag
+          // controls are attached per-row instead of appearing in one late
+          // flash after the whole playlist finishes loading.
+          DOMObserver.startDragDropObserver();
           await PlaylistProcessor.loadAll(autoloadEnabled);
           DOMObserver.startDelta(autoloadEnabled);
-          DOMObserver.startDragDropObserver();
 
           if (window.__ytmeTagger) {
             State.allTracks = PlaylistProcessor.extractTracks();
@@ -1412,6 +1498,13 @@ const Enhancer = {
             UIManager.injectAllTrackUI();
           }
         } catch (err) {
+          if (String(err?.message || err).includes('Extension context invalidated')) {
+            DOMObserver._stopDelta();
+            DOMObserver._stopDragDropObserver();
+            InteractionHandler.releaseGlobalBindings();
+            resolve();
+            return;
+          }
           console.error('[YTM-Enhancer] Post-inject setup failed:', err);
         }
         resolve();
