@@ -1,6 +1,6 @@
 # 🎵 Dupi - YT Music Playlist Organizer
 
-[![Version](https://img.shields.io/badge/version-1.2.2-00f0ff.svg?style=flat-square)](https://github.com/AexZeM/yt-music-playlist-enhancer)
+[![Version](https://img.shields.io/badge/version-1.3.1-00f0ff.svg?style=flat-square)](https://github.com/AexZeM/yt-music-playlist-enhancer)
 [![Platform](https://img.shields.io/badge/platform-Chrome-red.svg?style=flat-square)](https://music.youtube.com)
 [![License](https://img.shields.io/badge/license-MIT-lightgrey.svg?style=flat-square)](LICENSE)
 
