@@ -7,21 +7,15 @@ if (window.__ytmeEnhancerLoaded) {
 
 const Config = Object.freeze({
   selectors: {
-    searchBox:       'ytmusic-search-box',
-    trackRow:        'ytmusic-responsive-list-item-renderer',
-    trackTitle:      '.title',
-    trackArtist:     '.flex-column yt-formatted-string',
-    trackDuration:   '.fixed-columns yt-formatted-string, .duration',
-    trackThumb:      'img#img',
-    playlistTitle:   'ytmusic-responsive-header-renderer yt-formatted-string.title',
-    actionMenu:      'button[aria-label="Action menu"]',
-    removeOption:    'ytmusic-menu-popup-renderer yt-formatted-string',
-    playlistShelf:   'ytmusic-playlist-shelf-renderer',
-    sentinels:       ['ytmusic-continuation-item-renderer','yt-next-continuation',
-                      '#continuations','iron-scroll-threshold','paper-spinner'],
-    scrollContainers:['ytmusic-playlist-shelf-renderer','ytmusic-section-list-renderer',
-                      'ytmusic-browse-response','#contents.ytmusic-section-list-renderer'],
-    byline:          'yt-formatted-string.byline-text',
+    searchBox:       window.__ytmeDom.selectors.searchBox,
+    trackRow:        window.__ytmeDom.selectors.trackRows,
+    trackTitle:      window.__ytmeDom.selectors.trackTitle,
+    trackArtist:     window.__ytmeDom.selectors.trackArtist,
+    trackDuration:   window.__ytmeDom.selectors.trackDuration,
+    trackThumb:      window.__ytmeDom.selectors.trackThumb,
+    playlistTitle:   window.__ytmeDom.selectors.playlistTitle,
+    actionMenu:      window.__ytmeDom.selectors.actionMenu,
+    playlistShelf:   window.__ytmeDom.selectors.playlistShelf,
   },
   thresholds: {
     dupTitleSim:   0.96,
@@ -36,8 +30,6 @@ const Config = Object.freeze({
     waitMs:        350,
     maxStall:      12,
     stallWaitMs:   600,
-    scrollAmount:  900,
-    sentinelReset: 600,
   },
   highlight: {
     color:    'rgba(59,130,246,0.35)',
@@ -146,30 +138,17 @@ const Util = {
 };
 
 const PlaylistProcessor = {
+  _loadPromise: null,
+  _autoloadBlockedAt: null,
+
   // grabs all tracks from DOM, stays in the shelf or YTM's suggestion rows sneak in
   extractTracks() {
     try {
       // gotta lock to the shelf, otherwise it picks up autocomplete junk
-      const shelf = document.querySelector(Config.selectors.playlistShelf)
-                 || document.querySelector('ytmusic-browse-response')
-                 || document.querySelector('#contents.ytmusic-section-list-renderer')
-                 || document.body;
-
-      const els = shelf.querySelectorAll(Config.selectors.trackRow);
+      const els = window.__ytmeDom.getTrackElements(document);
       // skip empty placeholder rows YTM likes to render for no reason
-      return Array.from(els).filter(el => {
-        const title = el.querySelector(Config.selectors.trackTitle);
-        return title && title.innerText.trim().length > 0;
-      }).map((el, idx) => {
-        const titleEl    = el.querySelector(Config.selectors.trackTitle);
-        const durationEl = el.querySelector(Config.selectors.trackDuration);
-        const thumbEl    = el.querySelector(Config.selectors.trackThumb);
-        const artistEls  = el.querySelectorAll(Config.selectors.trackArtist);
-
-        const rawTitle  = titleEl?.innerText?.trim()  || '';
-        const rawArtist = artistEls[0]?.innerText?.trim() || '';
-        const duration  = durationEl?.innerText?.trim() || '';
-        const thumb     = thumbEl?.src || '';
+      return els.map((el, idx) => {
+        const { rawTitle, rawArtist, duration, thumb } = window.__ytmeDom.getTrackData(el, idx);
 
         return {
           idx, element: el, rawTitle, rawArtist, duration, thumb,
@@ -186,28 +165,33 @@ const PlaylistProcessor = {
 
   /** @returns {number} */
   getCurrentCount() {
-    const shelf = document.querySelector(Config.selectors.playlistShelf)
-               || document.querySelector('ytmusic-browse-response')
-               || document.body;
-    return shelf.querySelectorAll(Config.selectors.trackRow).length;
+    return window.__ytmeDom.getTrackElements(document).length;
   },
 
   /** @returns {number|null} */
   getExpectedCount() {
-    const el = document.querySelector(Config.selectors.byline);
-    // Check the header renderer first as it's more reliable for counts
-    const header = document.querySelector('ytmusic-playlist-sidebar-primary-info-renderer .stats yt-formatted-string');
-    const targetEl = header || el;
-    if (!targetEl) return null;
-    
-    const text  = targetEl.getAttribute('aria-label') || targetEl.innerText || '';
-    const match = text.match(/(\d+)\s*(songs?)/i) || text.match(/(\d[\d,.]*)/);
-    return match ? parseInt(match[1].replace(/[,. ]/g, ''), 10) : null;
+    return window.__ytmeDom.getExpectedCount(document);
   },
 
-  // scrolls down until everything's loaded — kinda hacky but it works
+  // silently exposes YTM's continuation sentinel until every available row is loaded
   async loadAll(autoloadEnabled) {
-    if (!autoloadEnabled) return;
+    if (!autoloadEnabled) return { complete: false, exhausted: false, count: this.getCurrentCount() };
+    if (this._loadPromise) return this._loadPromise;
+
+    const current = this.getCurrentCount();
+    if (this._autoloadBlockedAt === current) {
+      return { complete: false, exhausted: true, count: current };
+    }
+
+    this._loadPromise = this._loadAllTracks();
+    try {
+      return await this._loadPromise;
+    } finally {
+      this._loadPromise = null;
+    }
+  },
+
+  async _loadAllTracks() {
 
     const { maxAttempts, waitMs, maxStall, stallWaitMs } = Config.lazy;
     let lastCount = this.getCurrentCount(), stalledRounds = 0, attempts = 0;
@@ -217,9 +201,15 @@ const PlaylistProcessor = {
     while (attempts++ < maxAttempts) {
       const count    = this.getCurrentCount();
       const expected = this.getExpectedCount();
-      if (expected && count >= expected) break;
+      if (expected !== null && count >= expected) {
+        this._autoloadBlockedAt = null;
+        return { complete: true, exhausted: false, count };
+      }
 
-      this._scrollToLoad();
+      if (!this._scrollToLoad()) {
+        this._autoloadBlockedAt = count;
+        return { complete: false, exhausted: true, count };
+      }
       await Util.sleep(waitMs);
 
       const newCount = this.getCurrentCount();
@@ -227,34 +217,25 @@ const PlaylistProcessor = {
         stalledRounds = 0;
         lastCount     = newCount;
       } else if (++stalledRounds >= maxStall) {
-        if (!this.getExpectedCount() || this.getCurrentCount() >= this.getExpectedCount()) break;
-        stalledRounds = 0;
         await Util.sleep(stallWaitMs);
+        const finalCount = this.getCurrentCount();
+        const finalExpected = this.getExpectedCount();
+        const complete = finalExpected !== null && finalCount >= finalExpected;
+        this._autoloadBlockedAt = complete ? null : finalCount;
+        return { complete, exhausted: !complete, count: finalCount };
       }
     }
 
-    console.log(`[YTM-Enhancer] Total: ${this.getCurrentCount()} tracks`);
+    const finalCount = this.getCurrentCount();
+    const finalExpected = this.getExpectedCount();
+    const complete = finalExpected !== null && finalCount >= finalExpected;
+    this._autoloadBlockedAt = complete ? null : finalCount;
+    console.log(`[YTM-Enhancer] Total: ${finalCount} tracks`);
+    return { complete, exhausted: !complete, count: finalCount };
   },
 
   _scrollToLoad() {
-    const sentinel = Config.selectors.sentinels.map(s => document.querySelector(s)).find(Boolean);
-    if (sentinel) {
-      this._teleportSentinel(sentinel);
-      return;
-    }
-    for (const sel of Config.selectors.scrollContainers) {
-      const el = document.querySelector(sel);
-      if (!el) continue;
-      const before = el.scrollTop;
-      el.scrollTop += Config.lazy.scrollAmount;
-      if (el.scrollTop !== before) return;
-    }
-  },
-
-  _teleportSentinel(sentinel) {
-    const saved = { position: sentinel.style.position, top: sentinel.style.top, left: sentinel.style.left, opacity: sentinel.style.opacity, pointerEvents: sentinel.style.pointerEvents, zIndex: sentinel.style.zIndex, visibility: sentinel.style.visibility };
-    Object.assign(sentinel.style, { position: 'fixed', top: '50%', left: '50%', opacity: '0', pointerEvents: 'none', zIndex: '-9999', visibility: 'hidden' });
-    setTimeout(() => Object.assign(sentinel.style, saved), Config.lazy.sentinelReset);
+    return window.__ytmeDom.requestMoreTracks(document);
   },
 
   // finds duplicates by comparing title/artist similarity + duration gap
@@ -367,7 +348,7 @@ const UIManager = {
 
     el.dataset.ytmeTagged = '1';
 
-    const fixedColumns = el.querySelector('.fixed-columns');
+    const fixedColumns = window.__ytmeDom.getFixedColumns(el);
     const durationEl   = el.querySelector(Config.selectors.trackDuration);
     if (!fixedColumns || !durationEl) return;
 
@@ -709,10 +690,14 @@ const InteractionHandler = {
   _tagPickerSelected: new Set(),
   _ctxTarget:         null,
   _ctxAnchor:         null,
+  _globalBindingsAbort: null,
 
   /** Wire up all event listeners after shadow DOM is ready. */
   bindAll() {
     const { el } = UIManager;
+    this.releaseGlobalBindings();
+    this._globalBindingsAbort = new AbortController();
+    const globalListenerOptions = { signal: this._globalBindingsAbort.signal };
 
     // YTM intercepts keyboard events, stop that
     const stopYT = e => e.stopPropagation();
@@ -747,7 +732,7 @@ const InteractionHandler = {
     document.addEventListener('click', e => {
       if (!shadow.contains(e.target)) this._closePopup();
       if (el.ctxMenu?.classList.contains('visible') && !el.ctxMenu.contains(e.target)) el.ctxMenu.classList.remove('visible');
-    });
+    }, globalListenerOptions);
 
     window.addEventListener('ytme:tags-updated', () => {
       UIManager.refreshAllBadges();
@@ -758,7 +743,12 @@ const InteractionHandler = {
           () => { chrome.runtime.lastError; }
         );
       } catch { /* popup not open */ }
-    });
+    }, globalListenerOptions);
+  },
+
+  releaseGlobalBindings() {
+    this._globalBindingsAbort?.abort();
+    this._globalBindingsAbort = null;
   },
 
   // shows/hides tracks based on whats selected
@@ -770,10 +760,7 @@ const InteractionHandler = {
       window.__ytmeTagger?.filterTracks(tracks, State.activeGenres);
     }
     UIManager.renderFilterIndicator();
-    const shelf = document.querySelector(Config.selectors.playlistShelf)
-               || document.querySelector('ytmusic-browse-response')
-               || document.body;
-    const trackElements = Array.from(shelf.querySelectorAll(Config.selectors.trackRow));
+    const trackElements = window.__ytmeDom.getTrackElements(document);
     return { visible: trackElements.filter(el => el.style.display !== 'none').length, total: trackElements.length };
   },
 
@@ -862,11 +849,7 @@ const InteractionHandler = {
     if (query.length < 2) { this._closePopup(); return; }
 
     // stay in the shelf, not YTM's suggestion dropdowns
-    const shelf = document.querySelector(Config.selectors.playlistShelf)
-               || document.querySelector('ytmusic-browse-response')
-               || document.body;
-
-    const tracks = Array.from(shelf.querySelectorAll(Config.selectors.trackRow)).map(el => ({
+    const tracks = window.__ytmeDom.getTrackElements(document).map(el => ({
       element: el,
       title: el.querySelector(Config.selectors.trackTitle)?.innerText.trim().toLowerCase() || '',
     }));
@@ -901,8 +884,7 @@ const InteractionHandler = {
       const type  = r.score !== undefined ? 'fuzzy' : matchType === 'starts' ? 'exact' : 'partial';
       const item  = document.createElement('div');
       item.className = 'result-item';
-      const artistEls = track.element.querySelectorAll(Config.selectors.trackArtist);
-      const artist    = artistEls[0]?.innerText?.trim() || '';
+      const artist    = window.__ytmeDom.getArtist(track.element);
       const badge     = type === 'exact' ? 'badge-exact' : type === 'partial' ? 'badge-partial' : 'badge-fuzzy';
       const label     = type === 'exact' ? 'Exact'       : type === 'partial' ? 'Contains'      : 'Fuzzy';
       item.innerHTML  = `<span class="result-index">${i+1}</span><div class="result-info"><span class="result-title">${track.title}</span>${artist ? `<span class="result-artist">${artist}</span>` : ''}</div><span class="result-match-badge ${badge}">${label}</span>`;
@@ -1115,12 +1097,11 @@ const InteractionHandler = {
       element.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
       element.dispatchEvent(new MouseEvent('mouseover',  { bubbles: true }));
       await Util.sleep(300);
-      const menuBtn = element.querySelector(Config.selectors.actionMenu);
+      const menuBtn = window.__ytmeDom.getActionMenuButton(element);
       if (!menuBtn) { console.warn('[YTM-Enhancer] Action menu not found'); return; }
       menuBtn.click();
       await Util.sleep(600);
-      const removeItem = Array.from(document.querySelectorAll(Config.selectors.removeOption))
-        .find(el => el.innerText.trim() === 'Remove from playlist');
+      const removeItem = window.__ytmeDom.getRemoveMenuItem(document);
       if (!removeItem) { console.warn('[YTM-Enhancer] Remove option not found'); return; }
       removeItem.click();
       await Util.sleep(300);
@@ -1142,29 +1123,32 @@ const MessageBridge = {
 
           case 'GET_TRACKS': {
             const tracks = PlaylistProcessor.extractTracks();
-            const titleEl = document.querySelector(Config.selectors.playlistTitle);
             const stats   = window.__ytmeTagger?.getStats(State.allTracks.length ? State.allTracks : tracks)
                           ?? { genreCounts: {}, untagged: tracks.length, total: tracks.length };
             sendResponse({
               tracks,
-              playlistTitle: titleEl?.innerText?.trim() || document.title || 'My Playlist',
+              playlistTitle: window.__ytmeDom.getPlaylistTitle(document),
               stats,
             });
+            return;
           }
 
           case 'APPLY_FILTERS':
             State.activeGenres = msg.genres || [];
             sendResponse(InteractionHandler.applyFilters());
+            return;
 
           case 'GET_STATS':
             sendResponse({ stats: window.__ytmeTagger?.getStats(State.allTracks) ?? null });
+            return;
 
           case 'NAVIGATED':
             console.log('[YTM-Enhancer] NAVIGATED message received', msg.url);
-            Enhancer.softReset();
+            Enhancer.softReset(msg.url);
             sendResponse({ success: true });
+            return;
 
-          case 'THEME':
+          case 'THEME': {
             applyThemeToHost(msg.themeId);
             const theme = YTME_THEMES[msg.themeId] || YTME_THEMES['default'];
             document.documentElement.style.setProperty('--ytme-bg', theme.bg);
@@ -1172,6 +1156,8 @@ const MessageBridge = {
             document.documentElement.style.setProperty('--ytme-text', theme.text);
             document.documentElement.style.setProperty('--ytme-border', `color-mix(in srgb, ${theme.text} 15%, transparent)`);
             sendResponse({ success: true });
+            return;
+          }
         }
       } catch (err) {
         console.error('[YTM-Enhancer] Message handler error:', err);
@@ -1211,6 +1197,7 @@ const DOMObserver = {
   _mutationObs:    null,
   _deltaObs:       null,
   _deltaInterval:  null,
+  _deltaBusy:      false,
   _dragDropObs:    null,
 
   // watch for SPA navigation
@@ -1233,6 +1220,7 @@ const DOMObserver = {
             host.remove();
           }
           this._stopDelta();
+          InteractionHandler.releaseGlobalBindings();
           Enhancer._injected = false;
         }
       }, 250);
@@ -1260,11 +1248,18 @@ const DOMObserver = {
     this._deltaInterval = setInterval(async () => {
       const expected = PlaylistProcessor.getExpectedCount();
       const current  = PlaylistProcessor.getCurrentCount();
-      if (autoloadEnabled && expected && current < expected) {
-        await PlaylistProcessor.loadAll(autoloadEnabled);
+      if (!autoloadEnabled || expected === null || current >= expected ||
+          PlaylistProcessor._autoloadBlockedAt === current || this._deltaBusy) return;
+
+      this._deltaBusy = true;
+      try {
+        const result = await PlaylistProcessor.loadAll(autoloadEnabled);
+        if (result.count <= current) return;
         State.allTracks = PlaylistProcessor.extractTracks();
         UIManager.injectAllTrackUI(); // inject buttons on the fresh tracks
         UIManager.refreshAllBadges();
+      } finally {
+        this._deltaBusy = false;
       }
     }, 5000);
   },
@@ -1272,6 +1267,8 @@ const DOMObserver = {
   _stopDelta() {
     this._deltaObs?.disconnect();
     if (this._deltaInterval) clearInterval(this._deltaInterval);
+    this._deltaInterval = null;
+    this._deltaBusy = false;
   },
 
   // Drag-and-drop observer: captures childList changes when songs are moved
@@ -1285,10 +1282,10 @@ const DOMObserver = {
         if (mutation.type === 'childList') {
           mutation.addedNodes.forEach(node => {
             if (node.nodeType !== 1) return;
-            if (node.tagName === 'YTMUSIC-RESPONSIVE-LIST-ITEM-RENDERER') {
+            if (window.__ytmeDom.isTrackRow(node)) {
               nodesToProcess.add(node);
             } else {
-              node.querySelectorAll('ytmusic-responsive-list-item-renderer')
+              window.__ytmeDom.getDescendantTrackRows(node)
                   .forEach(n => nodesToProcess.add(n));
             }
           });
@@ -1304,7 +1301,8 @@ const DOMObserver = {
       });
     });
 
-    const playlistContainer = document.querySelector('ytmusic-playlist-shelf-renderer #contents') || document.body;
+    const playlistContainer = window.__ytmeDom.getPlaylistContents(document);
+    if (!playlistContainer) return;
     this._dragDropObs.observe(playlistContainer, { childList: true, subtree: true });
   },
 
@@ -1316,40 +1314,30 @@ const DOMObserver = {
 
 const Enhancer = {
   _injected: false,
+  _lastNavigationUrl: window.location.href,
 
   init() {
     MessageBridge.register();
-    
-    // poll for the search box, 100ms is fine
-    const fastCheck = setInterval(async () => {
-      const href = window.location.href;
-      const isPlaylist = href.includes('music.youtube.com/playlist') ||
-                         href.includes('music.youtube.com/browse/VL');
-      if (!isPlaylist) {
-        // not on a playlist anymore, clean up
-        if (document.body && document.body.contains(host)) {
-          host.remove();
-          this._injected = false;
-        }
-        return;
-      }
-      const searchBox = document.querySelector(Config.selectors.searchBox);
-      if (searchBox) {
-        clearInterval(fastCheck);
-        await this.injectUI();
-      }
-    }, 100);
+
+    // Try once immediately. The navigation observer retries when YTM adds the
+    // search box, without leaving a permanent 100ms poll on non-playlist pages.
+    this.injectUI();
     
     // keep watching for SPA nav
     DOMObserver.watchNavigation();
   },
 
   /** Soft reset when SPA navigation detected by background script */
-  async softReset() {
+  async softReset(nextUrl = window.location.href) {
+    if (nextUrl === this._lastNavigationUrl) return false;
+    this._lastNavigationUrl = nextUrl;
+
     State.allTracks = [];
     State.dupGroups = [];
+    PlaylistProcessor._autoloadBlockedAt = null;
     DOMObserver._stopDelta();
     DOMObserver._stopDragDropObserver();
+    InteractionHandler.releaseGlobalBindings();
     // console.log('softReset called from:', window.location.href);
 
     // wipe stale tags so last playlist's data doesnt bleed in
@@ -1362,7 +1350,7 @@ const Enhancer = {
     const href = window.location.href;
     const isPlaylist = href.includes('music.youtube.com/playlist') ||
                        href.includes('music.youtube.com/browse/VL');
-    if (!isPlaylist) return;
+    if (!isPlaylist) return true;
 
     const waitForSearch = () => new Promise(resolve => {
       const interval = setInterval(() => {
@@ -1376,6 +1364,7 @@ const Enhancer = {
 
     await waitForSearch();
     await this.injectUI();
+    return true;
   },
 
   async injectUI() {

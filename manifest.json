@@ -39,6 +39,7 @@
       ],
       "js": [
         "fuse.basic.min.js",
+        "dom_contract.js",
         "tagger.js",
         "content.js"
       ],

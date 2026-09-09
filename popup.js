@@ -151,7 +151,7 @@ function reloadContentScript() {
     if (!tab) return;
     chrome.scripting.executeScript({
       target: { tabId: tab.id },
-      files:  ['fuse.basic.min.js', 'tagger.js', 'content.js']
+      files:  ['fuse.basic.min.js', 'dom_contract.js', 'tagger.js', 'content.js']
     }, () => {
       chrome.runtime.lastError;
     });
@@ -210,7 +210,7 @@ async function fetchTracks(tabId, attempt = 1) {
 
       // Content script isn't ready yet, inject it
       chrome.scripting.executeScript(
-        { target: { tabId }, files: ['fuse.basic.min.js', 'tagger.js', 'content.js'] },
+        { target: { tabId }, files: ['fuse.basic.min.js', 'dom_contract.js', 'tagger.js', 'content.js'] },
         () => {
           if (chrome.runtime.lastError) {
             showError('Failed to inject script: ' + chrome.runtime.lastError.message);
