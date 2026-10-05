@@ -86,6 +86,7 @@ const State = {
   allTracks:    [],
   activeGenres: [],
   dupGroups:    [],
+  dupSkippedDuration: 0,
   selectedDups: new Set(),
 };
 
@@ -101,9 +102,10 @@ const Util = {
   },
 
   parseDuration(str) {
-    if (!str) return 0;
-    const parts = str.split(':').map(Number);
-    return parts.length === 2 ? parts[0] * 60 + parts[1] : 0;
+    if (typeof str !== 'string' || !/^\d+:[0-5]\d(?::[0-5]\d)?$/.test(str.trim())) return null;
+    const parts = str.trim().split(':').map(Number);
+    const seconds = parts.reduce((total, part) => total * 60 + part, 0);
+    return Number.isSafeInteger(seconds) ? seconds : null;
   },
 
   strSimilarity(a, b) {
@@ -259,7 +261,7 @@ const PlaylistProcessor = {
         const aSim = Util.strSimilarity(a.normArtist, b.normArtist);
         const dA   = Util.parseDuration(a.duration);
         const dB   = Util.parseDuration(b.duration);
-        if (dA && dB && Math.abs(dA - dB) > dupDurationGap) continue;
+        if (dA === null || dB === null || Math.abs(dA - dB) > dupDurationGap) continue;
 
         if (tSim >= dupTitleSim && (aSim >= dupArtistSim || !a.normArtist || !b.normArtist)) {
           group.push(b); assigned.add(j);
@@ -760,6 +762,9 @@ const InteractionHandler = {
   _ctxTarget:         null,
   _ctxAnchor:         null,
   _globalBindingsAbort: null,
+  _dupEpoch: 0,
+  _deleteOperation: null,
+  _savedOverflow: null,
 
   /** Wire up all event listeners after shadow DOM is ready. */
   bindAll() {
@@ -967,50 +972,71 @@ const InteractionHandler = {
     const { el } = UIManager;
     if (!el.dupOverlay) return;
     el.dupOverlay.classList.add('visible');
+    if (!this._savedOverflow) {
+      this._savedOverflow = { body: document.body, value: document.body.style.overflow };
+    }
     document.body.style.overflow = 'hidden';
     this._runDupScan();
   },
 
   _closeDupModal() {
     const { el } = UIManager;
-    if (!el.dupOverlay) return;
-    el.dupOverlay.classList.remove('visible');
-    document.body.style.overflow = '';
+    this._dupEpoch++;
+    if (this._deleteOperation) this._deleteOperation.cancelled = true;
+    el.dupOverlay?.classList.remove('visible');
+    if (this._savedOverflow) {
+      this._savedOverflow.body.style.overflow = this._savedOverflow.value;
+      this._savedOverflow = null;
+    }
     State.selectedDups.clear();
   },
 
   async _runDupScan() {
     const { el } = UIManager;
-    if (!el.dupBody) return;
+    if (!el.dupBody || (this._deleteOperation && !this._deleteOperation.cancelled)) return;
+    const epoch = ++this._dupEpoch;
+    const url = window.location.href;
+    const current = () => epoch === this._dupEpoch && url === window.location.href && el === UIManager.el;
+    let interval;
+    try {
+      el.dupBody.innerHTML = '';
+      el.dupEmpty?.classList.remove('visible');
+      el.dupToolbar?.classList.remove('visible');
+      el.dupFooter?.classList.remove('visible');
+      if (el.dupScanning) el.dupScanning.style.display = 'flex';
+      if (el.dupSubtitle) el.dupSubtitle.textContent   = 'SCANNING PLAYLIST…';
+      if (el.scanFill)    el.scanFill.style.width       = '0%';
+      if (el.scanLabel)   el.scanLabel.textContent      = 'INITIALIZING…';
+      State.selectedDups.clear();
 
-    el.dupBody.innerHTML = '';
-    el.dupEmpty?.classList.remove('visible');
-    el.dupToolbar?.classList.remove('visible');
-    el.dupFooter?.classList.remove('visible');
-    if (el.dupScanning) el.dupScanning.style.display = 'flex';
-    if (el.dupSubtitle) el.dupSubtitle.textContent   = 'SCANNING PLAYLIST…';
-    if (el.scanFill)    el.scanFill.style.width       = '0%';
-    if (el.scanLabel)   el.scanLabel.textContent      = 'INITIALIZING…';
-    State.selectedDups.clear();
+      await Util.sleep(80);
+      if (!current()) return;
+      const tracks = PlaylistProcessor.extractTracks();
+      State.dupSkippedDuration = tracks.filter(track => Util.parseDuration(track.duration) === null).length;
+      if (el.scanLabel) el.scanLabel.textContent = `ANALYZING ${tracks.length} TRACKS…`;
 
-    await Util.sleep(80);
-    const tracks = PlaylistProcessor.extractTracks();
-    if (el.scanLabel) el.scanLabel.textContent = `ANALYZING ${tracks.length} TRACKS…`;
+      let progress = 0;
+      interval = setInterval(() => {
+        progress = Math.min(progress + Math.random() * 8, 85);
+        if (el.scanFill) el.scanFill.style.width = `${progress}%`;
+      }, 120);
 
-    let progress = 0;
-    const interval = setInterval(() => {
-      progress = Math.min(progress + Math.random() * 8, 85);
-      if (el.scanFill) el.scanFill.style.width = `${progress}%`;
-    }, 120);
-
-    await Util.sleep(60);
-    State.dupGroups = PlaylistProcessor.detectDuplicates(tracks);
-    clearInterval(interval);
-    if (el.scanFill)  el.scanFill.style.width  = '100%';
-    if (el.scanLabel) el.scanLabel.textContent = 'COMPLETE';
-    await Util.sleep(300);
-    if (el.dupScanning) el.dupScanning.style.display = 'none';
-    this._renderDupResults();
+      await Util.sleep(60);
+      if (!current()) return;
+      State.dupGroups = PlaylistProcessor.detectDuplicates(tracks);
+      clearInterval(interval);
+      if (el.scanFill)  el.scanFill.style.width  = '100%';
+      if (el.scanLabel) el.scanLabel.textContent = 'COMPLETE';
+      await Util.sleep(300);
+      if (!current()) return;
+      if (el.dupScanning) el.dupScanning.style.display = 'none';
+      this._renderDupResults();
+    } catch (err) {
+      if (current()) this._closeDupModal();
+      console.error('[YTM-Enhancer] Duplicate scan failed:', err);
+    } finally {
+      clearInterval(interval);
+    }
   },
 
   _renderDupResults() {
@@ -1019,13 +1045,20 @@ const InteractionHandler = {
     el.dupBody.innerHTML = '';
     State.selectedDups.clear();
 
+    const skipped = State.dupSkippedDuration;
+    const coverage = skipped ? ` — ${skipped} track${skipped > 1 ? 's' : ''} excluded: unknown duration` : '';
+    const emptyText = el.dupEmpty?.querySelector('.empty-text');
+    if (emptyText) emptyText.textContent = skipped
+      ? 'No duplicates found among tracks with known durations.'
+      : "Dupi-dupi can't find anything! You're all clear.";
+
     if (!State.dupGroups.length) {
       el.dupEmpty?.classList.add('visible');
-      if (el.dupSubtitle) el.dupSubtitle.textContent = 'COMPLETE — NO DUPLICATES';
+      if (el.dupSubtitle) el.dupSubtitle.textContent = `NO DUPLICATES FOUND${coverage}`;
       return;
     }
 
-    if (el.dupSubtitle)   el.dupSubtitle.textContent   = `Dupi-dupi found ${State.dupGroups.length} duplicate group${State.dupGroups.length > 1 ? 's' : ''}!`;
+    if (el.dupSubtitle)   el.dupSubtitle.textContent   = `Dupi-dupi found ${State.dupGroups.length} duplicate group${State.dupGroups.length > 1 ? 's' : ''}!${coverage}`;
     if (el.dupCountBadge) el.dupCountBadge.textContent = `${State.dupGroups.length} group${State.dupGroups.length > 1 ? 's' : ''}`;
     el.dupToolbar?.classList.add('visible');
     el.dupFooter?.classList.add('visible');
@@ -1055,6 +1088,7 @@ const InteractionHandler = {
     if (!isFirst) { cb.checked = true; State.selectedDups.add(track.idx); row.classList.add('selected'); }
 
     cb.addEventListener('change', () => {
+      if (cb.disabled) return;
       const tagEl = row.querySelector('[data-tag]');
       if (cb.checked) {
         State.selectedDups.add(track.idx);
@@ -1069,7 +1103,7 @@ const InteractionHandler = {
       this._updateDupUI();
     });
 
-    row.addEventListener('click', e => { if (e.target === cb) return; cb.checked = !cb.checked; cb.dispatchEvent(new Event('change')); });
+    row.addEventListener('click', e => { if (e.target === cb || cb.disabled) return; cb.checked = !cb.checked; cb.dispatchEvent(new Event('change')); });
 
     const thumb = document.createElement('div');
     thumb.className = 'track-thumb';
@@ -1096,12 +1130,17 @@ const InteractionHandler = {
   _updateDupUI() {
     const { el } = UIManager;
     const count = State.selectedDups.size;
+    const busy = Boolean(this._deleteOperation && !this._deleteOperation.cancelled);
     if (el.selCount)    el.selCount.textContent    = count ? `${count} track${count>1?'s':''} selected` : '';
-    if (el.btnRemoveSel) el.btnRemoveSel.disabled  = count === 0;
+    if (el.btnRemoveSel) el.btnRemoveSel.disabled  = busy || count === 0;
     if (el.btnConfirmDel) {
-      el.btnConfirmDel.disabled    = count === 0;
-      el.btnConfirmDel.textContent = count ? `🗑 Delete ${count} Track${count>1?'s':''}` : '🗑 Delete Selected';
+      el.btnConfirmDel.disabled    = busy || count === 0;
+      el.btnConfirmDel.textContent = busy ? 'Deleting…' : count ? `🗑 Delete ${count} Track${count>1?'s':''}` : '🗑 Delete Selected';
     }
+    [el.btnRescan, el.btnSelectAll, el.btnAutoKeep].forEach(button => { if (button) button.disabled = busy; });
+    el.dupBody?.querySelectorAll('.track-checkbox').forEach(cb => {
+      cb.disabled = busy || cb.closest('.dup-track-row')?.dataset.removed === 'true';
+    });
     if (el.footerInfo) el.footerInfo.textContent = count
       ? `${count} of ${State.dupGroups.reduce((a,g) => a+g.tracks.length, 0)} duplicates marked`
       : '';
@@ -1109,7 +1148,7 @@ const InteractionHandler = {
 
   _selectAllDups() {
     shadow.querySelectorAll('.dup-track-row:not(.keep-row) .track-checkbox').forEach(cb => {
-      if (!cb.checked) { cb.checked = true; cb.dispatchEvent(new Event('change')); }
+      if (!cb.disabled && !cb.checked) { cb.checked = true; cb.dispatchEvent(new Event('change')); }
     });
   },
 
@@ -1119,7 +1158,7 @@ const InteractionHandler = {
       group.tracks.forEach((track, tIdx) => {
         const row = body?.querySelector(`[data-track-idx="${track.idx}"]`);
         const cb  = row?.querySelector('.track-checkbox');
-        if (!cb) return;
+        if (!cb || cb.disabled) return;
         const should = tIdx !== 0;
         if (cb.checked !== should) { cb.checked = should; cb.dispatchEvent(new Event('change')); }
       });
@@ -1127,13 +1166,19 @@ const InteractionHandler = {
   },
 
   async _confirmDelete() {
-    if (!State.selectedDups.size) return;
+    if (!State.selectedDups.size || (this._deleteOperation && !this._deleteOperation.cancelled)) return;
     const count = State.selectedDups.size;
     if (!confirm(`Delete ${count} track${count>1?'s':''} from this playlist? This cannot be undone.`)) return;
 
     const { el } = UIManager;
-    if (el.btnConfirmDel) { el.btnConfirmDel.disabled = true; el.btnConfirmDel.textContent = 'Deleting…'; }
-    if (el.btnRemoveSel)    el.btnRemoveSel.disabled = true;
+    const operation = {
+      epoch: this._dupEpoch,
+      url: window.location.href,
+      contents: window.__ytmeDom.getPlaylistContents(document),
+      cancelled: false,
+    };
+    this._deleteOperation = operation;
+    this._updateDupUI();
 
     // descending order so removing doesnt mess up indices
     const toRemove = State.dupGroups.flatMap(g => g.tracks)
@@ -1141,41 +1186,100 @@ const InteractionHandler = {
       .sort((a, b) => b.idx - a.idx);
 
     let removed = 0;
-    for (const track of toRemove) {
-      const row = el.dupBody?.querySelector(`[data-track-idx="${track.idx}"]`);
-      await this._removeTrack(track.element);
-      if (row) row.style.opacity = '0.3';
-      removed++;
-      if (el.dupSubtitle) el.dupSubtitle.textContent = `REMOVING ${removed}/${count}…`;
-      await Util.sleep(400);
+    try {
+      for (const track of toRemove) {
+        const result = await this._removeTrack(track, operation);
+        // A closed/replaced modal must never receive an old operation's result.
+        if (operation.cancelled || operation.epoch !== this._dupEpoch || el !== UIManager.el) return;
+        if (result.status !== 'removed') {
+          if (el.dupSubtitle) el.dupSubtitle.textContent =
+            `STOPPED — ${removed}/${count} removals confirmed in page. ${result.reason} Remaining selections kept.`;
+          return;
+        }
+        State.selectedDups.delete(track.idx);
+        const row = el.dupBody?.querySelector(`[data-track-idx="${track.idx}"]`);
+        if (row) {
+          row.style.opacity = '0.3';
+          row.dataset.removed = 'true';
+          row.classList.remove('selected');
+          const cb = row.querySelector('.track-checkbox');
+          if (cb) { cb.checked = false; cb.disabled = true; }
+          const tag = row.querySelector('.track-tag');
+          if (tag) tag.textContent = 'REMOVED';
+        }
+        removed++;
+        if (el.dupSubtitle) el.dupSubtitle.textContent = `${removed}/${count} removals confirmed in page`;
+      }
+    } catch (err) {
+      if (!operation.cancelled && operation.epoch === this._dupEpoch && el === UIManager.el) {
+        if (el.dupSubtitle) el.dupSubtitle.textContent =
+          `STOPPED — ${removed}/${count} removals confirmed in page. Unexpected error; remaining selections kept.`;
+      }
+      console.error('[YTM-Enhancer] Delete operation failed:', err);
+    } finally {
+      if (this._deleteOperation === operation) this._deleteOperation = null;
+      if (!operation.cancelled && operation.epoch === this._dupEpoch && el === UIManager.el) this._updateDupUI();
     }
-
-    State.dupGroups = [];
-    State.selectedDups.clear();
-    if (el.dupSubtitle) el.dupSubtitle.textContent = `✓ REMOVED ${count} TRACK${count>1?'S':''}`;
-    await Util.sleep(800);
-    this._closeDupModal();
   },
 
-  async _removeTrack(element) {
+  _isDeleteCurrent(operation) {
+    return this._deleteOperation === operation && !operation.cancelled &&
+      operation.epoch === this._dupEpoch && operation.url === window.location.href &&
+      operation.contents?.isConnected &&
+      window.__ytmeDom.getPlaylistContents(document) === operation.contents;
+  },
+
+  async _removeTrack(track, operation) {
+    const element = track.element;
+    let clicked = false;
+    const stale = () => ({ status: 'unverified', reason: 'Playlist changed or operation cancelled; rescan before retrying.' });
+    const validRow = () => {
+      if (!this._isDeleteCurrent(operation) || !element?.isConnected ||
+          !operation.contents.contains(element)) return false;
+      const current = window.__ytmeDom.getTrackData(element);
+      return current.rawTitle === track.rawTitle && current.rawArtist === track.rawArtist &&
+        current.duration === track.duration;
+    };
     try {
+      if (!validRow()) return stale();
       element.scrollIntoView({ behavior: 'smooth', block: 'center' });
       await Util.sleep(400);
+      if (!validRow()) return stale();
       element.dispatchEvent(new PointerEvent('pointerenter', { bubbles: true }));
       element.dispatchEvent(new PointerEvent('pointerover',  { bubbles: true }));
       element.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
       element.dispatchEvent(new MouseEvent('mouseover',  { bubbles: true }));
       await Util.sleep(300);
+      if (!validRow()) return stale();
+      // Refuse a pre-existing visible menu rather than risk acting on another row.
+      if (window.__ytmeDom.getRemoveMenuItem(document)) {
+        return { status: 'failed', reason: 'Close the open track menu before retrying.' };
+      }
       const menuBtn = window.__ytmeDom.getActionMenuButton(element);
-      if (!menuBtn) { console.warn('[YTM-Enhancer] Action menu not found'); return; }
+      if (!menuBtn) return { status: 'failed', reason: 'Track menu not found.' };
       menuBtn.click();
       await Util.sleep(600);
+      if (!validRow()) return stale();
       const removeItem = window.__ytmeDom.getRemoveMenuItem(document);
-      if (!removeItem) { console.warn('[YTM-Enhancer] Remove option not found'); return; }
+      if (!removeItem) return { status: 'failed', reason: 'Visible remove option not found.' };
+      clicked = true;
       removeItem.click();
-      await Util.sleep(300);
+      const deadline = Date.now() + 5000;
+      while (true) {
+        if (!this._isDeleteCurrent(operation)) return stale();
+        if (!operation.contents.contains(element)) {
+          return element.isConnected
+            ? { status: 'unverified', reason: 'Track moved to another container; rescan before retrying.' }
+            : { status: 'removed', reason: 'Target row removal confirmed in page.' };
+        }
+        if (!validRow()) return stale();
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) return { status: 'unverified', reason: 'Removal not confirmed within 5 seconds; check the playlist before retrying.' };
+        await Util.sleep(Math.min(100, remaining));
+      }
     } catch (err) {
       console.error('[YTM-Enhancer] Failed to remove track:', err);
+      return { status: clicked ? 'unverified' : 'failed', reason: 'Track action failed; check the playlist before retrying.' };
     }
   },
 };
@@ -1409,6 +1513,8 @@ const Enhancer = {
   async softReset(nextUrl = window.location.href, force = false) {
     if (!force && nextUrl === this._lastNavigationUrl) return false;
     this._lastNavigationUrl = nextUrl;
+
+    InteractionHandler._closeDupModal();
 
     State.allTracks = [];
     State.dupGroups = [];

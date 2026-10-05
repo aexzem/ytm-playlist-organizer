@@ -1,6 +1,6 @@
 # 🎵 Dupi - YT Music Playlist Organizer
 
-[![Version](https://img.shields.io/badge/version-1.3.1-00f0ff.svg?style=flat-square)](https://github.com/AexZeM/yt-music-playlist-enhancer)
+[![Version](https://img.shields.io/badge/version-1.3.2-00f0ff.svg?style=flat-square)](https://github.com/AexZeM/yt-music-playlist-enhancer)
 [![Platform](https://img.shields.io/badge/platform-Chrome-red.svg?style=flat-square)](https://music.youtube.com)
 [![License](https://img.shields.io/badge/license-MIT-lightgrey.svg?style=flat-square)](LICENSE)
 
@@ -68,6 +68,42 @@ For more information, see the project's [Privacy Policy](https://github.com/aexz
 Bug reports, feature suggestions, and contributions are welcome.
 
 If you encounter a problem or have an idea for Dupi, feel free to open an issue or submit a pull request.
+
+### Local regression tests
+
+With Node.js 22 or newer, run from the repository root:
+
+```sh
+node --test tests/*.test.cjs
+```
+
+No dependency installation is needed. Tests execute the extension source in an
+isolated VM with fake DOM, clock, and Chrome storage objects. They cover duration
+parsing, duplicate exclusions, deletion failures/timeouts/cancellation, modal
+scroll cleanup, and Unicode tag migration. They never delete real playlist tracks,
+write to browser storage, or call Last.fm. Passing them does not establish live
+browser or server-side deletion correctness.
+
+### Duplicate safety and tag storage
+
+Duplicate comparisons require valid visible durations (`m:ss` or `h:mm:ss`).
+Tracks with unknown durations are excluded and counted in the scan result.
+Deletion stops at the first failure or unconfirmed removal and retains remaining
+selections. Success means the target row disappeared from the same live playlist
+container within five seconds; it is not a server-side persistence guarantee.
+
+Tag identity now preserves Unicode, punctuation, case and internal whitespace,
+using NFC-normalized, trimmed title/artist pairs. New manual tags are stored in
+`ytme_manual_tags_v2`; snapshots use `ytme_snapshot_v2_<playlistId>`. Existing
+manual records migrate only when their saved original title and artist match.
+Existing v2 records take precedence, including deletion markers that prevent a
+removed tag from being re-imported. Storage updates use a shared Web Lock across
+YT Music tabs where supported, with a per-page queue as fallback.
+
+Legacy storage is retained. Legacy snapshots cannot establish track identity and
+are not restored; tags are recalculated by the existing pipeline. Tags already
+overwritten by the old colliding keys cannot be recovered automatically. Clearing
+the genre cache removes snapshots, but preserves manual tags and deletion markers.
 
 ## License
 

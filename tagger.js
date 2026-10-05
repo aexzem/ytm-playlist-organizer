@@ -199,14 +199,51 @@ const LASTFM_TAG_MAP = {
 };
 
 const TagStore = (() => {
-  /** @type {Map<number, {genres: string[], source: string}>} */
+  /** @type {Map<string, {genres: string[], source: string}>} */
   let _map = new Map();
+  const MANUAL_KEY = 'ytme_manual_tags_v2';
+  const SNAPSHOT_PREFIX = 'ytme_snapshot_v2_';
+  let _storageQueue = Promise.resolve();
 
   function _makeKey(track) {
-    return `${_norm(track.rawTitle)}|${_norm(track.rawArtist || '')}`;
+    return `v2:${JSON.stringify([_norm(track.rawTitle), _norm(track.rawArtist)])}`;
   }
   function _norm(s) {
-    return (s || '').toLowerCase().replace(/[^\w\s]/g, '').replace(/\s+/g, ' ').trim();
+    return typeof s === 'string' ? s.normalize('NFC').trim() : '';
+  }
+  function _record(value) {
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  }
+  function _genres(value) {
+    return Array.isArray(value) ? value.filter(genre => typeof genre === 'string') : [];
+  }
+  function _read(keys) {
+    return new Promise((resolve, reject) => {
+      chrome.storage.local.get(keys, data => {
+        const error = chrome.runtime.lastError;
+        if (error) reject(new Error(error.message));
+        else resolve(data || {});
+      });
+    });
+  }
+  function _write(data) {
+    return new Promise((resolve, reject) => {
+      chrome.storage.local.set(data, () => {
+        const error = chrome.runtime.lastError;
+        if (error) reject(new Error(error.message));
+        else resolve();
+      });
+    });
+  }
+  // Serialize migrations, picker writes and snapshots, including other YTM tabs
+  // when Web Locks is available. Keep the local queue as a fallback.
+  function _serialized(work) {
+    const result = _storageQueue.then(() =>
+      typeof navigator !== 'undefined' && navigator.locks?.request
+        ? navigator.locks.request('dupi-tag-storage-v2', work)
+        : work());
+    _storageQueue = result.catch(() => {});
+    return result;
   }
 
   return {
@@ -228,75 +265,119 @@ const TagStore = (() => {
     },
 
     async loadManual(tracks) {
-      return new Promise(resolve => {
-        chrome.storage.local.get('ytme_manual_tags', data => {
-          const manual = data.ytme_manual_tags || {};
-          tracks.forEach(track => {
-            const key = _makeKey(track);
-            if (manual[key]) {
-              _map.set(_makeKey(track), { genres: manual[key].genres || [], source: 'manual' });
-            }
-          });
-          resolve();
+      return _serialized(async () => {
+        const data = await _read([MANUAL_KEY, 'ytme_manual_tags']);
+        const manual = { ..._record(data[MANUAL_KEY]) };
+        const requested = new Set(tracks.map(_makeKey));
+        const candidates = new Map();
+        for (const legacy of Object.values(_record(data.ytme_manual_tags))) {
+          // The old lossy key cannot identify a track. Require original metadata.
+          if (!legacy || typeof legacy.title !== 'string' || !legacy.title.trim() ||
+              typeof legacy.artist !== 'string' || !Array.isArray(legacy.genres)) continue;
+          const key = _makeKey({ rawTitle: legacy.title, rawArtist: legacy.artist });
+          if (!requested.has(key) || Object.hasOwn(manual, key)) continue;
+          const candidate = { genres: _genres(legacy.genres), title: legacy.title, artist: legacy.artist };
+          if (candidates.has(key)) {
+            const previous = candidates.get(key);
+            if (!previous || JSON.stringify(previous.genres) !== JSON.stringify(candidate.genres)) candidates.set(key, null);
+          } else candidates.set(key, candidate);
+        }
+        let changed = false;
+        for (const [key, candidate] of candidates) {
+          if (candidate) { manual[key] = candidate; changed = true; }
+        }
+        if (changed) await _write({ [MANUAL_KEY]: manual });
+        tracks.forEach(track => {
+          const key = _makeKey(track);
+          const saved = manual[key];
+          if (saved?.deleted) {
+            if (_map.get(key)?.source === 'manual') _map.delete(key);
+          } else if (saved && Array.isArray(saved.genres)) {
+            _map.set(key, { genres: _genres(saved.genres), source: 'manual' });
+          }
         });
       });
     },
 
     async saveManual(track, genres) {
-      return new Promise(resolve => {
-        chrome.storage.local.get('ytme_manual_tags', data => {
-          const manual = data.ytme_manual_tags || {};
-          manual[_makeKey(track)] = { genres, title: track.rawTitle, artist: track.rawArtist };
-          chrome.storage.local.set({ ytme_manual_tags: manual }, () => {
-            _map.set(_makeKey(track), { genres, source: 'manual' });
-            window.dispatchEvent(new CustomEvent('ytme:tags-updated'));
-            resolve();
-          });
-        });
+      return _serialized(async () => {
+        const data = await _read(null);
+        const key = _makeKey(track);
+        const cleanGenres = _genres(genres);
+        const manual = { ..._record(data[MANUAL_KEY]), [key]: {
+          genres: cleanGenres, title: track.rawTitle, artist: track.rawArtist || '',
+        } };
+        const updates = { [MANUAL_KEY]: manual };
+        for (const [storageKey, value] of Object.entries(data)) {
+          if (storageKey.startsWith(SNAPSHOT_PREFIX) && Object.hasOwn(_record(value), key)) {
+            updates[storageKey] = { ...value, [key]: { genres: cleanGenres, source: 'manual' } };
+          }
+        }
+        await _write(updates);
+        _map.set(key, { genres: cleanGenres, source: 'manual' });
+        window.dispatchEvent(new CustomEvent('ytme:tags-updated'));
       });
     },
 
     async removeManual(track) {
-      return new Promise(resolve => {
-        chrome.storage.local.get('ytme_manual_tags', data => {
-          const manual = data.ytme_manual_tags || {};
-          delete manual[_makeKey(track)];
-          chrome.storage.local.set({ ytme_manual_tags: manual }, resolve);
-        });
+      return _serialized(async () => {
+        const data = await _read(null);
+        const key = _makeKey(track);
+        // Tombstone prevents a preserved legacy record from being re-imported.
+        const manual = { ..._record(data[MANUAL_KEY]), [key]: { deleted: true } };
+        const updates = { [MANUAL_KEY]: manual };
+        for (const [storageKey, value] of Object.entries(data)) {
+          if (storageKey.startsWith(SNAPSHOT_PREFIX) && Object.hasOwn(_record(value), key)) {
+            const snapshot = { ...value };
+            delete snapshot[key];
+            updates[storageKey] = snapshot;
+          }
+        }
+        await _write(updates);
+        _map.delete(key);
       });
     },
 
     // save tag state so we can restore it next time
     async savePlaylistSnapshot(playlistId, tracks) {
       if (!playlistId) return;
-      const snapshot = {};
-      tracks.forEach((t) => {
-        const tags = _map.get(_makeKey(t));
-        if (tags?.genres?.length > 0) {
-          snapshot[_makeKey(t)] = { genres: tags.genres, source: tags.source };
-        }
-      });
-      await new Promise(resolve => {
-        chrome.storage.local.set({ [`ytme_snapshot_${playlistId}`]: snapshot }, resolve);
+      return _serialized(async () => {
+        const data = await _read(MANUAL_KEY);
+        const manual = _record(data[MANUAL_KEY]);
+        const snapshot = {};
+        tracks.forEach(t => {
+          const key = _makeKey(t);
+          let tags = _map.get(key);
+          const saved = manual[key];
+          if (saved?.deleted && tags?.source === 'manual') return;
+          if (saved && !saved.deleted && Array.isArray(saved.genres)) tags = { genres: _genres(saved.genres), source: 'manual' };
+          if (tags?.genres?.length > 0) snapshot[key] = { genres: tags.genres, source: tags.source };
+        });
+        await _write({ [`${SNAPSHOT_PREFIX}${playlistId}`]: snapshot });
       });
     },
 
     // restore tags from a previous session if we have one
     async loadPlaylistSnapshot(playlistId, tracks) {
       if (!playlistId) return false;
-      const data = await new Promise(resolve => {
-        chrome.storage.local.get(`ytme_snapshot_${playlistId}`, resolve);
+      return _serialized(async () => {
+        // Legacy snapshots have no original metadata; never guess their identity.
+        const storageKey = `${SNAPSHOT_PREFIX}${playlistId}`;
+        const data = await _read([storageKey, MANUAL_KEY]);
+        const snapshot = _record(data[storageKey]);
+        const manual = _record(data[MANUAL_KEY]);
+        let applied = 0;
+        tracks.forEach(t => {
+          const key = _makeKey(t);
+          const cached = snapshot[key];
+          if (cached?.source === 'manual' && manual[key]?.deleted) return;
+          if (_genres(cached?.genres).length > 0) {
+            _map.set(key, { genres: _genres(cached.genres), source: cached.source });
+            applied++;
+          }
+        });
+        return applied > 0;
       });
-      const snapshot = data[`ytme_snapshot_${playlistId}`];
-      if (!snapshot) return false;
-
-      let applied = 0;
-      tracks.forEach((t) => {
-        const cached = snapshot[_makeKey(t)];
-        if (cached?.genres?.length > 0) { _map.set(_makeKey(t), cached); applied++; }
-      });
-      console.log(`[YTM-Tagger] Snapshot: ${applied} tags applied`);
-      return true;
     },
   };
 })();
@@ -516,9 +597,11 @@ window.__ytmeTagger = {
             window.dispatchEvent(new CustomEvent('ytme:tags-updated', {
               detail: { stage: 'enriched', source: 'lastfm', playlistId }
             }));
-          });
+          })
+          .catch(err => console.error('[YTM-Tagger] Snapshot save failed:', err));
       } else {
-        TagStore.savePlaylistSnapshot(playlistId, tracks);
+        TagStore.savePlaylistSnapshot(playlistId, tracks)
+          .catch(err => console.error('[YTM-Tagger] Snapshot save failed:', err));
       }
     });
   },

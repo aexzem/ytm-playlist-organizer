@@ -94,7 +94,8 @@
       element: row,
       rawTitle: textOf(row?.querySelector(selectors.trackTitle)),
       rawArtist: getArtist(row),
-      duration: textOf(row?.querySelector(selectors.trackDuration)),
+      // aria-label is localized prose (e.g. "2 minutes, 46 seconds").
+      duration: (row?.querySelector(selectors.trackDuration)?.textContent || '').trim(),
       thumb: row?.querySelector(selectors.trackThumb)?.src || '',
     };
   }
@@ -119,6 +120,10 @@
 
   function getRemoveMenuItem(doc = document) {
     return Array.from(doc.querySelectorAll(selectors.menuServiceItems)).find(element => {
+      const style = doc.defaultView?.getComputedStyle(element);
+      if (!element.isConnected || !element.getClientRects().length ||
+          element.closest('[hidden], [aria-hidden="true"]') ||
+          style?.display === 'none' || style?.visibility === 'hidden') return false;
       const path = element.querySelector('yt-icon svg path')?.getAttribute('d') || '';
       return path.startsWith(REMOVE_ICON_PREFIX);
     }) || null;
